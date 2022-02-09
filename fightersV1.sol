@@ -1945,7 +1945,7 @@ contract fightersNFT is ERC721Enumerable, Ownable, IDrop {
   string public baseURI;
   string public baseExtension = ".json";
   string public notRevealedUri;
-  uint256 public regCost = 225 ether;
+  uint256 public regCost = 250 ether;
   uint256 public whiteCost = 175 ether;
   uint256 public memCost = 200 ether;
   uint256 public maxTokens = 1000;
