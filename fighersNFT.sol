@@ -1,31 +1,7 @@
 // SPDX-License-Identifier: MIT
-// OpenZeppelin Contracts v4.4.1 (utils/Context.sol)
-
-pragma solidity ^0.8.0;
-
-/**
- * @dev Provides information about the current execution context, including the
- * sender of the transaction and its data. While these are generally available
- * via msg.sender and msg.data, they should not be accessed in such a direct
- * manner, since when dealing with meta-transactions the account sending and
- * paying for execution may not be the actual sender (as far as an application
- * is concerned).
- *
- * This contract is only required for intermediate, library-like contracts.
- */
-abstract contract Context {
-    function _msgSender() internal view virtual returns (address) {
-        return msg.sender;
-    }
-
-    function _msgData() internal view virtual returns (bytes calldata) {
-        return msg.data;
-    }
-}
-
 // OpenZeppelin Contracts v4.4.1 (utils/Address.sol)
 
-
+pragma solidity ^0.8.0;
 
 /**
  * @dev Collection of functions related to the address type
@@ -237,6 +213,30 @@ library Address {
                 revert(errorMessage);
             }
         }
+    }
+}
+
+// OpenZeppelin Contracts v4.4.1 (utils/Context.sol)
+
+
+
+/**
+ * @dev Provides information about the current execution context, including the
+ * sender of the transaction and its data. While these are generally available
+ * via msg.sender and msg.data, they should not be accessed in such a direct
+ * manner, since when dealing with meta-transactions the account sending and
+ * paying for execution may not be the actual sender (as far as an application
+ * is concerned).
+ *
+ * This contract is only required for intermediate, library-like contracts.
+ */
+abstract contract Context {
+    function _msgSender() internal view virtual returns (address) {
+        return msg.sender;
+    }
+
+    function _msgData() internal view virtual returns (bytes calldata) {
+        return msg.data;
     }
 }
 
@@ -1920,6 +1920,248 @@ contract ERC1155 is Context, ERC165, IERC1155, IERC1155MetadataURI {
 }
 
 
+// OpenZeppelin Contracts v4.4.1 (security/PullPayment.sol)
+
+
+
+
+// OpenZeppelin Contracts v4.4.1 (utils/escrow/Escrow.sol)
+
+
+
+
+
+
+/**
+ * @title Escrow
+ * @dev Base escrow contract, holds funds designated for a payee until they
+ * withdraw them.
+ *
+ * Intended usage: This contract (and derived escrow contracts) should be a
+ * standalone contract, that only interacts with the contract that instantiated
+ * it. That way, it is guaranteed that all Ether will be handled according to
+ * the `Escrow` rules, and there is no need to check for payable functions or
+ * transfers in the inheritance tree. The contract that uses the escrow as its
+ * payment method should be its owner, and provide public methods redirecting
+ * to the escrow's deposit and withdraw.
+ */
+contract Escrow is Ownable {
+    using Address for address payable;
+
+    event Deposited(address indexed payee, uint256 weiAmount);
+    event Withdrawn(address indexed payee, uint256 weiAmount);
+
+    mapping(address => uint256) private _deposits;
+
+    function depositsOf(address payee) public view returns (uint256) {
+        return _deposits[payee];
+    }
+
+    /**
+     * @dev Stores the sent amount as credit to be withdrawn.
+     * @param payee The destination address of the funds.
+     */
+    function deposit(address payee) public payable virtual onlyOwner {
+        uint256 amount = msg.value;
+        _deposits[payee] += amount;
+        emit Deposited(payee, amount);
+    }
+
+    /**
+     * @dev Withdraw accumulated balance for a payee, forwarding all gas to the
+     * recipient.
+     *
+     * WARNING: Forwarding all gas opens the door to reentrancy vulnerabilities.
+     * Make sure you trust the recipient, or are either following the
+     * checks-effects-interactions pattern or using {ReentrancyGuard}.
+     *
+     * @param payee The address whose funds will be withdrawn and transferred to.
+     */
+    function withdraw(address payable payee) public virtual onlyOwner {
+        uint256 payment = _deposits[payee];
+
+        _deposits[payee] = 0;
+
+        payee.sendValue(payment);
+
+        emit Withdrawn(payee, payment);
+    }
+}
+
+
+/**
+ * @dev Simple implementation of a
+ * https://consensys.github.io/smart-contract-best-practices/recommendations/#favor-pull-over-push-for-external-calls[pull-payment]
+ * strategy, where the paying contract doesn't interact directly with the
+ * receiver account, which must withdraw its payments itself.
+ *
+ * Pull-payments are often considered the best practice when it comes to sending
+ * Ether, security-wise. It prevents recipients from blocking execution, and
+ * eliminates reentrancy concerns.
+ *
+ * TIP: If you would like to learn more about reentrancy and alternative ways
+ * to protect against it, check out our blog post
+ * https://blog.openzeppelin.com/reentrancy-after-istanbul/[Reentrancy After Istanbul].
+ *
+ * To use, derive from the `PullPayment` contract, and use {_asyncTransfer}
+ * instead of Solidity's `transfer` function. Payees can query their due
+ * payments with {payments}, and retrieve them with {withdrawPayments}.
+ */
+abstract contract PullPayment {
+    Escrow private immutable _escrow;
+
+    constructor() {
+        _escrow = new Escrow();
+    }
+
+    /**
+     * @dev Withdraw accumulated payments, forwarding all gas to the recipient.
+     *
+     * Note that _any_ account can call this function, not just the `payee`.
+     * This means that contracts unaware of the `PullPayment` protocol can still
+     * receive funds this way, by having a separate account call
+     * {withdrawPayments}.
+     *
+     * WARNING: Forwarding all gas opens the door to reentrancy vulnerabilities.
+     * Make sure you trust the recipient, or are either following the
+     * checks-effects-interactions pattern or using {ReentrancyGuard}.
+     *
+     * @param payee Whose payments will be withdrawn.
+     */
+    function withdrawPayments(address payable payee) public virtual {
+        _escrow.withdraw(payee);
+    }
+
+    /**
+     * @dev Returns the payments owed to an address.
+     * @param dest The creditor's address.
+     */
+    function payments(address dest) public view returns (uint256) {
+        return _escrow.depositsOf(dest);
+    }
+
+    /**
+     * @dev Called by the payer to store the sent amount as credit to be pulled.
+     * Funds sent in this way are stored in an intermediate {Escrow} contract, so
+     * there is no danger of them being spent before withdrawal.
+     *
+     * @param dest The destination address of the funds.
+     * @param amount The amount to transfer.
+     */
+    function _asyncTransfer(address dest, uint256 amount) internal virtual {
+        _escrow.deposit{value: amount}(dest);
+    }
+}
+
+
+
+library SafeMathLite{
+
+    /**
+     * @dev Returns the addition of two unsigned integers, reverting on
+     * overflow.
+     *
+     * Counterpart to Solidity's `+` operator.
+     *
+     * Requirements:
+     *
+     * - Addition cannot overflow.
+     */
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a + b;
+    }
+
+    /**
+     * @dev Returns the subtraction of two unsigned integers, reverting on
+     * overflow (when the result is negative).
+     *
+     * Counterpart to Solidity's `-` operator.
+     *
+     * Requirements:
+     *
+     * - Subtraction cannot overflow.
+     */
+    function sub(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a - b;
+    }
+
+    /**
+     * @dev Returns the multiplication of two unsigned integers, reverting on
+     * overflow.
+     *
+     * Counterpart to Solidity's `*` operator.
+     *
+     * Requirements:
+     *
+     * - Multiplication cannot overflow.
+     */
+    function mul(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a * b;
+    }
+
+    /**
+     * @dev Returns the integer division of two unsigned integers, reverting on
+     * division by zero. The result is rounded towards zero.
+     *
+     * Counterpart to Solidity's `/` operator.
+     *
+     * Requirements:
+     *
+     * - The divisor cannot be zero.
+     */
+    function div(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a / b;
+    }
+}
+
+
+
+
+/**
+ * @dev Compute percentages safely without phantom overflows.
+ *
+ * Intermediate operations can overflow even when the result will always
+ * fit into computed type. Developers usually
+ * assume that overflows raise errors. `SafePct` restores this intuition by
+ * reverting the transaction when such an operation overflows.
+ *
+ * Using this library instead of the unchecked operations eliminates an entire
+ * class of bugs, so it's recommended to use it always.
+ *
+ * Can be combined with {SafeMath} and {SignedSafeMath} to extend it to smaller types, by performing
+ * all math on `uint256` and `int256` and then downcasting.
+ */
+
+library SafePct {
+    using SafeMathLite for uint256;
+    /**
+     * Requirements:
+     *
+     * - intermediate operations must revert on overflow
+     */
+    function mulDiv(uint256 x, uint256 y, uint256 z) internal pure returns (uint256) {
+        require(z > 0, "Division by zero");
+
+        if (x == 0) return 0;
+        uint256 xy = x * y;
+        if (xy / x == y) { // no overflow happened - same as in SafeMath mul
+            return xy / z;
+        }
+
+        //slither-disable-next-line divide-before-multiply
+        uint256 a = x / z;
+        uint256 b = x % z; // x = a * z + b
+
+        //slither-disable-next-line divide-before-multiply
+        uint256 c = y / z;
+        uint256 d = y % z; // y = c * z + d
+
+        return (a.mul(c).mul(z)).add(a.mul(d)).add(b.mul(c)).add(b.mul(d).div(z));
+    }
+
+
+}
+
 
 interface IDrop {
     struct Info {
@@ -1931,150 +2173,183 @@ interface IDrop {
         uint256 maxMintPerAddress;
         uint256 maxMintPerTx;
     }
-    
-    function mintCost(address _minter) external view returns(uint256);
+
+    function mintCost(address _minter) external view returns (uint256);
+
     function canMint(address _minter) external view returns (uint256);
+
     function mint(uint256 _amount) external payable;
+
     function maxSupply() external view returns (uint256);
+
     function getInfo() external view returns (Info memory);
 }
 
-contract fightersNFT is ERC721Enumerable, Ownable, IDrop {
-  ERC1155 public memberships;
-  using Strings for uint256;
-  string public baseURI;
-  string public baseExtension = ".json";
-  string public notRevealedUri;
-  uint256 public regCost = 250 ether;
-  uint256 public whiteCost = 175 ether;
-  uint256 public memCost = 200 ether;
-  uint256 public maxTokens = 1000;
-  uint256 public maxMintAmount = 5;
-  uint256 public nftPerAddressLimit = 5;
-  uint256 private cost;
-  bool public paused = true;
-  bool public revealed = false;
-  bool public onlyWhitelisted = true;
-  mapping(address => bool) private whitelistedAddresses;
-  mapping(address => uint256) public addressMintedBalance;
+contract fightersNFT is ERC721Enumerable, Ownable, IDrop, PullPayment {
+    ERC1155 public memberships;
+    using SafePct for uint256;
+    using SafeMathLite for uint256;
+    using Strings for uint256;
+    string public baseURI;
+    string public baseExtension = ".json";
+    string public notRevealedUri;
+    uint256 public regCost = 250 ether;
+    uint256 public whiteCost = 175 ether;
+    uint256 public memCost = 200 ether;
+    uint256 public maxTokens = 1000;
+    uint256 public maxMintAmount = 5;
+    uint256 public nftPerAddressLimit = 5;
+    uint256 internal cost;
+    uint256 internal fee = 1000;
+    uint256 internal scale = 10000;
+    bool public paused = true;
+    bool public revealed = true;
+    bool public onlyWhitelisted = true;
+    mapping(address => bool) private whitelistedAddresses;
+    mapping(address => uint256) public addressMintedBalance;
 
-  constructor(
-    string memory _name,
-    string memory _symbol,
-    string memory _initBaseURI,
-    string memory _initNotRevealedUri,
-    address _memberships
+    constructor(
+        string memory _name,
+        string memory _symbol,
+        string memory _initBaseURI,
+        string memory _initNotRevealedUri,
+        address _memberships
+    ) ERC721(_name, _symbol) {
+        memberships = ERC1155(_memberships);
+        setBaseURI(_initBaseURI);
+        setNotRevealedURI(_initNotRevealedUri);
+    }
 
-  ) ERC721(_name, _symbol) {
-    memberships = ERC1155(_memberships);
-    setBaseURI(_initBaseURI);
-    setNotRevealedURI(_initNotRevealedUri);
-  }
+    // internal
+    function _baseURI() internal view virtual override returns (string memory) {
+        return baseURI;
+    }
 
-  // internal
-  function _baseURI() internal view virtual override returns (string memory) {
-    return baseURI;
-  }
+    // public
 
-  // public
+    function mint(uint256 _mintAmount) public payable override {
+        require(!paused, "the contract is paused");
+        uint256 supply = totalSupply();
+        require(_mintAmount > 0, "need to mint at least 1 NFT");
+        require(
+            _mintAmount <= maxMintAmount,
+            "max mint amount per session exceeded"
+        );
+        require(supply + _mintAmount <= maxTokens, "max NFT limit exceeded");
 
-    function mint(uint256 _mintAmount) override public payable {
-    require(!paused, "the contract is paused");
-    uint256 supply = totalSupply();
-    require(_mintAmount > 0, "need to mint at least 1 NFT");
-    require(_mintAmount <= maxMintAmount, "max mint amount per session exceeded");
-    require(supply + _mintAmount <= maxTokens, "max NFT limit exceeded");
-
-    if (msg.sender != owner()) {
-        if(onlyWhitelisted == true) {
-            require(isWhitelisted(msg.sender), "user is not whitelisted");
+        if (msg.sender != owner()) {
+            if (onlyWhitelisted == true) {
+                require(isWhitelisted(msg.sender), "user is not whitelisted");
+            }
+            uint256 ownerMintedCount = addressMintedBalance[msg.sender];
+            require(
+                ownerMintedCount + _mintAmount <= nftPerAddressLimit,
+                "max NFT per address exceeded"
+            );
+            require(
+                msg.value >= mintCost(msg.sender) * _mintAmount,
+                "insufficient funds"
+            );
         }
-      uint256 ownerMintedCount = addressMintedBalance[msg.sender];
-      require(ownerMintedCount + _mintAmount <= nftPerAddressLimit, "max NFT per address exceeded");
-      require(msg.value >= mintCost(msg.sender) * _mintAmount, "insufficient funds");
-        
+
+        for (uint256 i = 1; i <= _mintAmount; i++) {
+            addressMintedBalance[msg.sender]++;
+            uint256 amountFee = mintCost(msg.sender).mulDiv(fee, scale);
+            _asyncTransfer(ebisusWallet, amountFee);
+            _safeMint(msg.sender, supply + i);
+        }
     }
 
-    for (uint256 i = 1; i <= _mintAmount; i++) {
-      addressMintedBalance[msg.sender]++;
-      _safeMint(msg.sender, supply + i);
-    }
-  }
-  
-  function isWhitelisted(address _user) public view returns (bool) {
-      return whitelistedAddresses[_user];
-  }
-
-  function walletOfOwner(address _owner)
-    public
-    view
-    returns (uint256[] memory)
-  {
-    uint256 ownerTokenCount = balanceOf(_owner);
-    uint256[] memory tokenIds = new uint256[](ownerTokenCount);
-    for (uint256 i; i < ownerTokenCount; i++) {
-      tokenIds[i] = tokenOfOwnerByIndex(_owner, i);
-    }
-    return tokenIds;
-  }
-
-  function tokenURI(uint256 tokenId)
-    public
-    view
-    virtual
-    override
-    returns (string memory)
-  {
-    require(
-      _exists(tokenId),
-      "ERC721Metadata: URI query for nonexistent token"
-    );
-    
-    if(revealed == false) {
-        return notRevealedUri;
+    function isWhitelisted(address _user) public view returns (bool) {
+        return whitelistedAddresses[_user];
     }
 
-    string memory currentBaseURI = _baseURI();
-    return bytes(currentBaseURI).length > 0
-        ? string(abi.encodePacked(currentBaseURI, tokenId.toString(), baseExtension))
-        : "";
-  }
-  //Check mint cost for address
-  function mintCost(address _minter) override public view returns(uint256) {
+    function walletOfOwner(address _owner)
+        public
+        view
+        returns (uint256[] memory)
+    {
+        uint256 ownerTokenCount = balanceOf(_owner);
+        uint256[] memory tokenIds = new uint256[](ownerTokenCount);
+        for (uint256 i; i < ownerTokenCount; i++) {
+            tokenIds[i] = tokenOfOwnerByIndex(_owner, i);
+        }
+        return tokenIds;
+    }
+
+    function tokenURI(uint256 tokenId)
+        public
+        view
+        virtual
+        override
+        returns (string memory)
+    {
+        require(
+            _exists(tokenId),
+            "ERC721Metadata: URI query for nonexistent token"
+        );
+
+        if (revealed == false) {
+            return notRevealedUri;
+        }
+
+        string memory currentBaseURI = _baseURI();
+        return
+            bytes(currentBaseURI).length > 0
+                ? string(
+                    abi.encodePacked(
+                        currentBaseURI,
+                        tokenId.toString(),
+                        baseExtension
+                    )
+                )
+                : "";
+    }
+
+    //Check mint cost for address
+    function mintCost(address _minter) public view override returns (uint256) {
         bool _isMember = isMember(_minter);
-        if(_isMember){return memCost;}
-        if(onlyWhitelisted){
-          if(isWhitelisted(_minter)){return whiteCost;}
+        if (_isMember) {
+            return memCost;
+        }
+        if (onlyWhitelisted) {
+            if (isWhitelisted(_minter)) {
+                return whiteCost;
+            }
         }
         return regCost;
-  }
-
-  //Checks if sender is member
-    function isMember(address _address) public view returns (bool) {
-        return memberships.balanceOf(_address, 1) > 0 || memberships.balanceOf(_address, 2) > 0;
     }
-  //Return max supply of tokens
-    function maxSupply() override external view returns (uint256) {
+
+    //Checks if sender is member
+    function isMember(address _address) public view returns (bool) {
+        return
+            memberships.balanceOf(_address, 1) > 0 ||
+            memberships.balanceOf(_address, 2) > 0;
+    }
+
+    //Return max supply of tokens
+    function maxSupply() external view override returns (uint256) {
         return maxTokens;
     }
-//Check if address can mint
-  function canMint(address _minter) override external view returns (uint256){
-    if(paused){
-      return 0;
-    }
-    uint256 ownerMintedCount = addressMintedBalance[_minter];
-    if(ownerMintedCount >= nftPerAddressLimit){
-      return 0;
-    }
-    if(onlyWhitelisted == true) {
-      if(!isWhitelisted(_minter)){
-        return 0;
-      }
-    }
-    return 1;
-  }
 
-    function getInfo() override external view returns (Info memory) {
+    //Check if address can mint
+    function canMint(address _minter) external view override returns (uint256) {
+        if (paused) {
+            return 0;
+        }
+        uint256 ownerMintedCount = addressMintedBalance[_minter];
+        if (ownerMintedCount >= nftPerAddressLimit) {
+            return 0;
+        }
+        if (onlyWhitelisted == true) {
+            if (!isWhitelisted(_minter)) {
+                return 0;
+            }
+        }
+        return 1;
+    }
+
+    function getInfo() external view override returns (Info memory) {
         Info memory allInfo;
         allInfo.regularCost = regCost;
         allInfo.memberCost = memCost;
@@ -2087,59 +2362,68 @@ contract fightersNFT is ERC721Enumerable, Ownable, IDrop {
         return allInfo;
     }
 
-  //only owner
-  function reveal() public onlyOwner {
-      revealed = true;
-  }
-  
-  function setNftPerAddressLimit(uint256 _limit) public onlyOwner {
-    nftPerAddressLimit = _limit;
-  }
-  
-  function setMemCost(uint256 _newCost) public onlyOwner {
-    memCost = _newCost;
-  }
-  function setWhiteCost(uint256 _newCost) public onlyOwner {
-    whiteCost = _newCost;
-  }
-  function setRegCost(uint256 _newCost) public onlyOwner {
-    regCost = _newCost;
-  }
+    //only owner
+    function reveal() public onlyOwner {
+        revealed = true;
+    }
 
-  function setMaxMintAmount(uint256 _newmaxMintAmount) public onlyOwner {
-    maxMintAmount = _newmaxMintAmount;
-  }
+    function setNftPerAddressLimit(uint256 _limit) public onlyOwner {
+        nftPerAddressLimit = _limit;
+    }
 
-  function setBaseURI(string memory _newBaseURI) public onlyOwner {
-    baseURI = _newBaseURI;
-  }
+    function setMemCost(uint256 _newCost) public onlyOwner {
+        memCost = _newCost;
+    }
 
-  function setBaseExtension(string memory _newBaseExtension) public onlyOwner {
-    baseExtension = _newBaseExtension;
-  }
-  
-  function setNotRevealedURI(string memory _notRevealedURI) public onlyOwner {
-    notRevealedUri = _notRevealedURI;
-  }
+    function setWhiteCost(uint256 _newCost) public onlyOwner {
+        whiteCost = _newCost;
+    }
 
-  function pause(bool _state) public onlyOwner {
-    paused = _state;
-  }
-  
-  function setOnlyWhitelisted(bool _state) public onlyOwner {
-    onlyWhitelisted = _state;
-  }
-  
-  function whitelistUsers(address[] calldata _users) public onlyOwner {
-    for (uint i = 0; i < _users.length; i++) {
+    function setRegCost(uint256 _newCost) public onlyOwner {
+        regCost = _newCost;
+    }
+
+    function setMaxMintAmount(uint256 _newmaxMintAmount) public onlyOwner {
+        maxMintAmount = _newmaxMintAmount;
+    }
+
+    function setBaseURI(string memory _newBaseURI) public onlyOwner {
+        baseURI = _newBaseURI;
+    }
+
+    function setBaseExtension(string memory _newBaseExtension)
+        public
+        onlyOwner
+    {
+        baseExtension = _newBaseExtension;
+    }
+
+    function setNotRevealedURI(string memory _notRevealedURI) public onlyOwner {
+        notRevealedUri = _notRevealedURI;
+    }
+
+    function pause(bool _state) public onlyOwner {
+        paused = _state;
+    }
+
+    function setOnlyWhitelisted(bool _state) public onlyOwner {
+        onlyWhitelisted = _state;
+    }
+
+    function whitelistUsers(address[] calldata _users) public onlyOwner {
+        for (uint256 i = 0; i < _users.length; i++) {
             whitelistedAddresses[_users[i]] = true;
-  }
-  }
-  function withdraw() public payable onlyOwner {
-    // =============================================================================
-    (bool os, ) = payable(0x7c53098AED50e7d2b5d0a4a89eF5B9C31a7b6AEE).call{value: address(this).balance}("");
-    require(os);
-    // =============================================================================
-  }
+        }
+    }
+
+    function withdraw() public payable onlyOwner {
+        // =============================================================================
+        (bool os, ) = payable(0x7c53098AED50e7d2b5d0a4a89eF5B9C31a7b6AEE).call{
+            value: address(this).balance
+        }("");
+        require(os);
+        // =============================================================================
+    }
 }
+
 
