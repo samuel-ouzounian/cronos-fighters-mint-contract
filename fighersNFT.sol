@@ -2255,7 +2255,7 @@ contract fightersNFT is ERC721Enumerable, Ownable, IDrop, PullPayment {
         for (uint256 i = 1; i <= _mintAmount; i++) {
             addressMintedBalance[msg.sender]++;
             uint256 amountFee = mintCost(msg.sender).mulDiv(fee, scale);
-            _asyncTransfer(ebisusWallet, amountFee);
+            _asyncTransfer(0x454cfAa623A629CC0b4017aEb85d54C42e91479d, amountFee);
             _safeMint(msg.sender, supply + i);
         }
     }
