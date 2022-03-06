@@ -2055,6 +2055,179 @@ abstract contract PullPayment {
 
 
 
+
+// OpenZeppelin Contracts v4.4.1 (utils/Counters.sol)
+
+
+
+/**
+ * @title Counters
+ * @author Matt Condon (@shrugs)
+ * @dev Provides counters that can only be incremented, decremented or reset. This can be used e.g. to track the number
+ * of elements in a mapping, issuing ERC721 ids, or counting request ids.
+ *
+ * Include with `using Counters for Counters.Counter;`
+ */
+library Counters {
+    struct Counter {
+        // This variable should never be directly accessed by users of the library: interactions must be restricted to
+        // the library's function. As of Solidity v0.5.2, this cannot be enforced, though there is a proposal to add
+        // this feature: see https://github.com/ethereum/solidity/issues/4637
+        uint256 _value; // default: 0
+    }
+
+    function current(Counter storage counter) internal view returns (uint256) {
+        return counter._value;
+    }
+
+    function increment(Counter storage counter) internal {
+        unchecked {
+            counter._value += 1;
+        }
+    }
+
+    function decrement(Counter storage counter) internal {
+        uint256 value = counter._value;
+        require(value > 0, "Counter: decrement overflow");
+        unchecked {
+            counter._value = value - 1;
+        }
+    }
+
+    function reset(Counter storage counter) internal {
+        counter._value = 0;
+    }
+}
+
+
+/// @author 1001.digital
+/// @title A token tracker that limits the token supply and increments token IDs on each new mint.
+abstract contract WithLimitedSupply {
+    using Counters for Counters.Counter;
+
+    /// @dev Emitted when the supply of this collection changes
+    event SupplyChanged(uint256 indexed supply);
+
+    // Keeps track of how many we have minted
+    Counters.Counter private _tokenCount;
+
+    /// @dev The maximum count of tokens this token tracker will hold.
+    uint256 private _maximumSupply;
+
+    /// Instanciate the contract
+    /// @param maximumSupply_ how many tokens this collection should hold
+    constructor (uint256 maximumSupply_) {
+        _maximumSupply = maximumSupply_;
+    }
+
+    /// @dev Get the max Supply
+    /// @return the maximum token count
+    function maximumSupply() public view returns (uint256) {
+        return _maximumSupply;
+    }
+
+    /// @dev Get the current token count
+    /// @return the created token count
+    function tokenCount() public view returns (uint256) {
+        return _tokenCount.current();
+    }
+
+    /// @dev Check whether tokens are still available
+    /// @return the available token count
+    function availableTokenCount() public view returns (uint256) {
+        return maximumSupply() - tokenCount();
+    }
+
+    /// @dev Increment the token count and fetch the latest count
+    /// @return the next token id
+    function nextToken() internal virtual returns (uint256) {
+        uint256 token = _tokenCount.current();
+
+        _tokenCount.increment();
+
+        return token;
+    }
+
+    /// @dev Check whether another token is still available
+    modifier ensureAvailability() {
+        require(availableTokenCount() > 0, "No more tokens available");
+        _;
+    }
+
+    /// @param amount Check whether number of tokens are still available
+    /// @dev Check whether tokens are still available
+    modifier ensureAvailabilityFor(uint256 amount) {
+        require(availableTokenCount() >= amount, "Requested number of tokens not available");
+        _;
+    }
+
+    /// Update the supply for the collection
+    /// @param _supply the new token supply.
+    /// @dev create additional token supply for this collection.
+    function _setSupply(uint256 _supply) internal virtual {
+        require(_supply > tokenCount(), "Can't set the supply to less than the current token count");
+        _maximumSupply = _supply;
+
+        emit SupplyChanged(maximumSupply());
+    }
+}
+
+abstract contract RandomlyAssigned is WithLimitedSupply {
+    // Used for random index assignment
+    mapping(uint256 => uint256) private tokenMatrix;
+
+    // The initial token ID
+    uint256 private startFrom;
+
+    /// Instanciate the contract
+    /// @param _maximumSupply how many tokens this collection should hold
+    /// @param _startFrom the tokenID with which to start counting
+    constructor (uint256 _maximumSupply, uint256 _startFrom)
+        WithLimitedSupply(_maximumSupply)
+    {
+        startFrom = _startFrom;
+    }
+
+    /// Get the next token ID
+    /// @dev Randomly gets a new token ID and keeps track of the ones that are still available.
+    /// @return the next token ID
+    function nextToken() internal override ensureAvailability returns (uint256) {
+        uint256 maxIndex = maximumSupply() - tokenCount();
+        uint256 random = uint256(keccak256(
+            abi.encodePacked(
+                msg.sender,
+                block.coinbase,
+                block.difficulty,
+                block.gaslimit,
+                block.timestamp
+            )
+        )) % maxIndex;
+
+        uint256 value = 0;
+        if (tokenMatrix[random] == 0) {
+            // If this matrix position is empty, set the value to the generated random number.
+            value = random;
+        } else {
+            // Otherwise, use the previously stored number from the matrix.
+            value = tokenMatrix[random];
+        }
+
+        // If the last available tokenID is still unused...
+        if (tokenMatrix[maxIndex - 1] == 0) {
+            // ...store that ID in the current matrix position.
+            tokenMatrix[random] = maxIndex - 1;
+        } else {
+            // ...otherwise copy over the stored number to the current matrix position.
+            tokenMatrix[random] = tokenMatrix[maxIndex - 1];
+        }
+
+        // Increment counts
+        super.nextToken();
+
+        return value + startFrom;
+    }
+}
+
 library SafeMathLite{
 
     /**
@@ -2185,26 +2358,28 @@ interface IDrop {
     function getInfo() external view returns (Info memory);
 }
 
-contract fightersNFT is ERC721Enumerable, Ownable, IDrop, PullPayment {
+contract fightersNFT is ERC721Enumerable, Ownable, IDrop, PullPayment, RandomlyAssigned {
     ERC1155 public memberships;
     using SafePct for uint256;
     using SafeMathLite for uint256;
     using Strings for uint256;
+    address public ownerAddress = 0xE024bb3E3bD1B68C101f604f742CeA66ecC4A2d2;
+    uint256 internal ownerMintStart = 948;
+    uint256 internal maxOwnerMint = 53; //Add one to the amount you are minting. Inclusive
     string public baseURI;
     string public baseExtension = ".json";
     string public notRevealedUri;
-    uint256 public regCost = 250 ether;
-    uint256 public whiteCost = 175 ether;
-    uint256 public memCost = 200 ether;
+    uint256 public regCost = 245 ether;
+    uint256 public whiteCost = 180 ether;
+    uint256 public memCost = 215 ether;
     uint256 public maxTokens = 1000;
     uint256 public maxMintAmount = 5;
-    uint256 public nftPerAddressLimit = 5;
+    uint256 public nftPerAddressLimit = 1000;
     uint256 internal cost;
     uint256 internal fee = 1000;
     uint256 internal scale = 10000;
     bool public paused = true;
     bool public revealed = true;
-    bool public onlyWhitelisted = true;
     mapping(address => bool) private whitelistedAddresses;
     mapping(address => uint256) public addressMintedBalance;
 
@@ -2212,12 +2387,11 @@ contract fightersNFT is ERC721Enumerable, Ownable, IDrop, PullPayment {
         string memory _name,
         string memory _symbol,
         string memory _initBaseURI,
-        string memory _initNotRevealedUri,
         address _memberships
-    ) ERC721(_name, _symbol) {
+    ) RandomlyAssigned(947, 1)
+    ERC721(_name, _symbol) {
         memberships = ERC1155(_memberships);
         setBaseURI(_initBaseURI);
-        setNotRevealedURI(_initNotRevealedUri);
     }
 
     // internal
@@ -2228,35 +2402,37 @@ contract fightersNFT is ERC721Enumerable, Ownable, IDrop, PullPayment {
     // public
 
     function mint(uint256 _mintAmount) public payable override {
+        uint256 total = 0;
         require(!paused, "the contract is paused");
         uint256 supply = totalSupply();
         require(_mintAmount > 0, "need to mint at least 1 NFT");
         require(
             _mintAmount <= maxMintAmount,
-            "max mint amount per session exceeded"
+            "max mint amount per transaction exceeded"
         );
         require(supply + _mintAmount <= maxTokens, "max NFT limit exceeded");
 
         if (msg.sender != owner()) {
-            if (onlyWhitelisted == true) {
-                require(isWhitelisted(msg.sender), "user is not whitelisted");
-            }
             uint256 ownerMintedCount = addressMintedBalance[msg.sender];
             require(
                 ownerMintedCount + _mintAmount <= nftPerAddressLimit,
                 "max NFT per address exceeded"
             );
+            for (uint256 i = 1; i <= _mintAmount; i++) {
+                total += mintCost(msg.sender);
+            }
             require(
-                msg.value >= mintCost(msg.sender) * _mintAmount,
+                msg.value >= total,
                 "insufficient funds"
             );
         }
 
         for (uint256 i = 1; i <= _mintAmount; i++) {
             addressMintedBalance[msg.sender]++;
+            uint256 id = nextToken();
             uint256 amountFee = mintCost(msg.sender).mulDiv(fee, scale);
             _asyncTransfer(0x454cfAa623A629CC0b4017aEb85d54C42e91479d, amountFee);
-            _safeMint(msg.sender, supply + i);
+            _safeMint(msg.sender, id);
         }
     }
 
@@ -2308,14 +2484,12 @@ contract fightersNFT is ERC721Enumerable, Ownable, IDrop, PullPayment {
 
     //Check mint cost for address
     function mintCost(address _minter) public view override returns (uint256) {
+        if (isWhitelisted(_minter)) {
+            if (walletOfOwner(_minter).length <= 4) {return whiteCost;} 
+        }
         bool _isMember = isMember(_minter);
         if (_isMember) {
             return memCost;
-        }
-        if (onlyWhitelisted) {
-            if (isWhitelisted(_minter)) {
-                return whiteCost;
-            }
         }
         return regCost;
     }
@@ -2341,11 +2515,6 @@ contract fightersNFT is ERC721Enumerable, Ownable, IDrop, PullPayment {
         if (ownerMintedCount >= nftPerAddressLimit) {
             return 0;
         }
-        if (onlyWhitelisted == true) {
-            if (!isWhitelisted(_minter)) {
-                return 0;
-            }
-        }
         return 1;
     }
 
@@ -2363,14 +2532,20 @@ contract fightersNFT is ERC721Enumerable, Ownable, IDrop, PullPayment {
     }
 
     //only owner
-    function reveal() public onlyOwner {
-        revealed = true;
+    function ownerAddressChange(address _ownerAddress) public onlyOwner {
+        ownerAddress = _ownerAddress;
     }
 
-    function setNftPerAddressLimit(uint256 _limit) public onlyOwner {
-        nftPerAddressLimit = _limit;
-    }
+    function ownerMint(uint256 _mintAmount) public payable onlyOwner {
+        uint256 supply = totalSupply();
+        require(supply + _mintAmount <= maxOwnerMint, "max NFT limit exceeded");
 
+        for (uint256 i = 1; i <= _mintAmount; i++) {
+            addressMintedBalance[msg.sender]++;
+            _safeMint(ownerAddress, ownerMintStart);
+            ownerMintStart = ownerMintStart + 1;
+        }
+    }
     function setMemCost(uint256 _newCost) public onlyOwner {
         memCost = _newCost;
     }
@@ -2391,23 +2566,8 @@ contract fightersNFT is ERC721Enumerable, Ownable, IDrop, PullPayment {
         baseURI = _newBaseURI;
     }
 
-    function setBaseExtension(string memory _newBaseExtension)
-        public
-        onlyOwner
-    {
-        baseExtension = _newBaseExtension;
-    }
-
-    function setNotRevealedURI(string memory _notRevealedURI) public onlyOwner {
-        notRevealedUri = _notRevealedURI;
-    }
-
     function pause(bool _state) public onlyOwner {
         paused = _state;
-    }
-
-    function setOnlyWhitelisted(bool _state) public onlyOwner {
-        onlyWhitelisted = _state;
     }
 
     function whitelistUsers(address[] calldata _users) public onlyOwner {
